@@ -2,7 +2,13 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <QueueArray.h>
 #include<Servo.h>
+
+// FIFO for calculation delta in measurement
+QueueArray<float> queue_lastAngles;
+QueueArray<long>  queue_lastTimes;
+#define QUEUE_OPERATION_SIZE      10 
 
 Servo servos[3]; 
 #define FB_D   A0 // feedback door 
@@ -48,7 +54,7 @@ void loop() {
   
     for( int i = 0; i < 3 ; i++ ){
         disp_securityStatus();
-        intrpt_delay(1500);
+        intrpt_delay(1000);
     }
   
      disp_time();
@@ -71,7 +77,6 @@ void check_RF(){
     // read data from RF module 
     char c = Serial.read();
     if( c == 'a' ){ // if valid code 
-      EN_SECURITY = false;
       tone( buzzer, 1047 /* C6 */ , 100);
       // GO SERVO UNLOCK AND OPEN
       go_servo(OPEN, 0);
@@ -79,10 +84,33 @@ void check_RF(){
   }
 }
 
+/*
+ * ==============================================================
+ * * * Motion detector 
+ * ==============================================================
+ *    + read feedback from servo 
+ *    + calc delta angle and time changes 
+ *    + check activation angle */ int AC_ANGLE = 110 ; /*
+ *    + calc velocity  ( F v-> )
+ *    + call go_servo( CLOSE, v0 );
+ */
 void check_motion(){
-  // detecting motion from servo feedback
-  // math speed, acceleration   
-  // close, validate close and lock, validate lock
+  float angle_now = map( analogRead( FB_D ), 82, 440, 0, 130);
+  long time_now   = millis();
+ 
+  if( queue_lastAngles.count() >= QUEUE_OPERATION_SIZE ){
+      float last_angle = queue_lastAngles.dequeue();
+      long last_time  = queue_lastTime.dequeue();
+
+      float delta_angle = ( angle_now - last_angle );
+      long  delta_time  = ( time_now  - last_time  );
+      if( angle_now < AC_ANGLE ){
+        double v0 = ( (delta_angle)/delta_time ); // velocity (degree per miliseconds)
+        Serial.println( v0);
+        go_servo( CLOSE, v0 );
+      }
+  }
+  
 }
 
 /*
@@ -91,18 +119,65 @@ void check_motion(){
  * ===============================================================
      + Exponencial motion
      + feedback read
+ * position lock mechanisum:
+     unlock  s[1] - 180; s[2] - 0;   
+     lock    s[1] - 90;  s[2] - 90;    
  */
 void go_servo( byte activ, double v0 ){ 
+    /*
+     * REGULATOR VAR's
+     * coefficient's( a1, a2, c1, c2 ) regulate curve 
+     * ========================================================== */
+      double delta_t;  /* Δtime */
+      
+      /* accel and decel slope */    /* half point of slope   */
+      double a1 = 6,  a2 = 3,          c1 = 1.8,   c2 = 8.2  ;
+      double y1, y2, y ;   /* var for function result  */
+      int n = 1000;        /* assign No. of point plot */
+     /* ==========================================================*/
+  
+  // ENABLE servo's
+  servos[0].attach(3);
+  servos[1].attach(4);
+  servos[2].attach(5);
+
+  
   if( activ == OPEN )
   {
-    // procedure unlock and open 
-    
+    // procedure unlock  
+    servos[1].write(180);
+    servos[2].write(0);
+    delay(200);
+    EN_SECURITY = false;
+
+    // procedure open
+    for( int i = 0; i < n ; i++ ){
+      double f = delta_t + ( delta_t / n ) * i;
+      {
+        y1 = 1/(1 + exp( -a1*(f-c1) ));
+        //y2 = 1/(1 + exp( -a2*(f-c2) ));
+        y = y1 * DOOR_LEVEL_OPEN; /* scale up factor *130 */
+        Serial.println(y);
+        servos[0].write( y );
+        delay(10);
+      }
+    }
   }
   else
   {
-    // procedure close and lock
+    // procedure close 
     
+    // procedure lock
+    servos[1].write(90);
+    servos[2].write(90);
+    delay(200);
   }
+
+  // DISABLE servo's
+  for( int i = 0; i < sizeof(servos); i++ ){
+    servos[i].detach();
+  }
+  
 }
 
 
@@ -199,3 +274,5 @@ void disp_RFvalid(){
   display.display();
   
 }
+
+
