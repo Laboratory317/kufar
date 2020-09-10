@@ -30,6 +30,10 @@ bool SCREEN_ALLOCATION = false;
 bool EN_SECURITY = true; // enabled security , status
 byte code[7] = {1, 0, 1, 0, 0, 1, 1 }; // unclock code 
 
+// Variables for setting the time / agusment delta = set - show_now
+int delta_hours   = 22;
+int delta_minutes = 25;
+
 void setup() {
   pinMode( FB_D,    INPUT );
   pinMode( FB_L,    INPUT );
@@ -79,7 +83,7 @@ void check_RF(){
     if( c == 'a' ){ // if valid code 
       tone( buzzer, 1047 /* C6 */ , 100);
       // GO SERVO UNLOCK AND OPEN
-      go_servo(OPEN, 0);
+      go_servo(UNSECURE, 0);
     }
   }
 }
@@ -107,7 +111,7 @@ void check_motion(){
       if( angle_now < AC_ANGLE ){
         double v0 = ( (delta_angle)/delta_time ); // velocity (degree per miliseconds)
         Serial.println( v0);
-        go_servo( CLOSE, v0 );
+        go_servo( SECURE, v0 );
       }
   }
 
@@ -177,7 +181,7 @@ void go_servo( byte activ, double v0 ){
       // procedure close 
       go_exp_motion_servo( 0 );
 
-      while( map(analogRead(FB_D), 57, 590, 0, 180) > 10 ) ){
+      while( map(analogRead(FB_D), 57, 590, 0, 180) > 10 ) {
         if( timeout_counter-- < 0 ){
             // error beep ...
             go_disable_servos();
@@ -315,8 +319,24 @@ void disp_time(){
   display.clearDisplay();
   display.setTextSize(2);             
   display.setTextColor(SSD1306_WHITE); 
-  display.setCursor(0,0);             
-  display.println(F("17:02"));
+  display.setCursor(0,0);          
+     
+  unsigned long Now = millis()/1000;
+  int seconds = Now % 60;
+  int minutes = ( Now / 60 ) % 60;
+  int hours   = ( Now / 3600 ) % 24;
+
+  // сверяваща щампа
+  hours   += delta_hours;
+  minutes += delta_minutes;
+
+  print_dec_clock(hours);
+  display.print(":");
+  print_dec_clock(minutes);
+  display.print(":");
+  print_dec_clock(seconds);
+  display.println();
+
   display.setTextSize(1);
   display.println(F("UTC+2 BG located"));
   display.display();
@@ -358,3 +378,7 @@ void disp_RFvalid(){
 }
 
 
+void print_dec_clock(int n) {
+  if (n<10) display.print('0');
+  display.print(n);
+}
