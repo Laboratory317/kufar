@@ -31,8 +31,7 @@ bool EN_SECURITY = true; // enabled security , status
 byte code[7] = {1, 0, 1, 0, 0, 1, 1 }; // unclock code 
 
 // Variables for setting the time / agusment delta = set - show_now
-int delta_hours   = 22;
-int delta_minutes = 25;
+long delta_stampTimeSet = 83460 ;
 
 void setup() {
   pinMode( FB_D,    INPUT );
@@ -70,6 +69,7 @@ void loop() {
 void intrpt_delay( int _milliseconds ){
   long feature_time =  millis() + _milliseconds;
   while( millis() < feature_time ){
+    check_serial_comport_pc();
     ( EN_SECURITY )? check_RF() : check_motion();
   }
 }
@@ -78,15 +78,29 @@ void check_RF(){
   /* listening for RF unlock signal
    * unlock, validate unlock and open */
   if( Serial.available() > 0 ){
+    if( SCREEN_ALLOCATION ) {
+      disp_RFinit();
+      delay(100);
+    }
+  
     // read data from RF module 
-    char c = Serial.read();
-    if( c == 'a' ){ // if valid code 
+    String code = Serial.readString();
+    if( code == "a" ){ // if valid code 
       tone( buzzer, 1047 /* C6 */ , 100);
+      if( SCREEN_ALLOCATION ) disp_RFvalid();
       // GO SERVO UNLOCK AND OPEN
       go_servo(UNSECURE, 0);
     }
   }
 }
+
+void check_serial_comport_pc(){
+  // read serial data
+  // delta_stampTimeSet = new_data
+}
+
+
+
 
 /*
  * ==============================================================
@@ -162,8 +176,8 @@ void go_servo( byte activ, double v0 ){
 
         while( map(analogRead(FB_L), 57, 590, 0, 180) > 175 ){ // servos[1] feedback read
           if( timeout_counter-- < 0 ){
-            // error beep ...
             go_disable_servos();
+            error_message(F("timeout unlock"));
             return; // exit from function
           }
           delay(1);
@@ -183,8 +197,8 @@ void go_servo( byte activ, double v0 ){
 
       while( map(analogRead(FB_D), 57, 590, 0, 180) > 10 ) {
         if( timeout_counter-- < 0 ){
-            // error beep ...
             go_disable_servos();
+            error_message(F("timeout close"));
             return; // exit from function
         }
         delay(1);
@@ -196,8 +210,8 @@ void go_servo( byte activ, double v0 ){
       int _timeout_counter = 2000;
       while( map(analogRead(FB_L), 57, 590, 0, 180) < 98 ){
         if( _timeout_counter-- < 0 ){
-            // error beep ...
             go_disable_servos();
+            error_message(F("timeout lock"));
             return; // exit from function
         }
       }
@@ -272,6 +286,8 @@ void go_disable_servos(){
 
 
 
+
+
 /* ================================================================
  * * * DISPLAY FRAME's * * 
  * create function disp_< frame_name > for anyone frame
@@ -321,14 +337,10 @@ void disp_time(){
   display.setTextColor(SSD1306_WHITE); 
   display.setCursor(0,0);          
      
-  unsigned long Now = millis()/1000;
+  unsigned long Now = (millis()/1000) + delta_stampTimeSet;
   int seconds = Now % 60;
   int minutes = ( Now / 60 ) % 60;
   int hours   = ( Now / 3600 ) % 24;
-
-  // сверяваща щампа
-  hours   += delta_hours;
-  minutes += delta_minutes;
 
   print_dec_clock(hours);
   display.print(":");
@@ -377,6 +389,22 @@ void disp_RFvalid(){
   
 }
 
+void error_message( String _exeption ){
+  display.clearDisplay();
+  display.setTextSize(2);             
+  display.setCursor(0,0);   
+  display.println(F("Exeption:")); 
+  display.setTextSize(1);          
+  display.println( _exeption );
+  display.display();
+  
+  // error beep times 
+  for( int i = 0; i < 15 ; i++ ){
+    tone( buzzer, 988, 100 );
+    delay(200); 
+  }
+  delay(4000);
+}
 
 void print_dec_clock(int n) {
   if (n<10) display.print('0');
