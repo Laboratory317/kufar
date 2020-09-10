@@ -16,8 +16,8 @@ Servo servos[3];
 #define DOOR_LEVEL_CLOSED 0
 #define DOOR_LEVEL_OPEN   130
 #define buzzer 13
-#define OPEN  1
-#define CLOSE 0 
+#define UNSECURE  1
+#define SECURE    0 
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 32 // OLED display height, in pixels
@@ -100,7 +100,7 @@ void check_motion(){
  
   if( queue_lastAngles.count() >= QUEUE_OPERATION_SIZE ){
       float last_angle = queue_lastAngles.dequeue();
-      long last_time  = queue_lastTime.dequeue();
+      long last_time  = queue_lastTimes.dequeue();
 
       float delta_angle = ( angle_now - last_angle );
       long  delta_time  = ( time_now  - last_time  );
@@ -110,6 +110,10 @@ void check_motion(){
         go_servo( CLOSE, v0 );
       }
   }
+
+  // UPDATE - put[LAST]
+  queue_lastAngles.push( angle_now );
+  queue_lastTimes.push( millis() );
   
 }
 
@@ -119,6 +123,7 @@ void check_motion(){
  * ===============================================================
      + Exponencial motion
      + feedback read
+     + map( analogRead(A1), 57, 590, 0, 180 )
  * position lock mechanisum:
      unlock  s[1] - 180; s[2] - 0;   
      lock    s[1] - 90;  s[2] - 90;    
@@ -128,56 +133,133 @@ void go_servo( byte activ, double v0 ){
      * REGULATOR VAR's
      * coefficient's( a1, a2, c1, c2 ) regulate curve 
      * ========================================================== */
-      double delta_t;  /* Δtime */
+      double delta_t = 10;  /* Δtime */
+      //int delay_time = 5;
       
-      /* accel and decel slope */    /* half point of slope   */
-      double a1 = 6,  a2 = 3,          c1 = 1.8,   c2 = 8.2  ;
+      double a = 2,      /* accel open slope */     
+             c = 8.2  ;  /* half point of slope   */
       double y1, y2, y ;   /* var for function result  */
-      int n = 1000;        /* assign No. of point plot */
+      int n = 1000;        /* assign No. of point plot */  
+      
+      /* * * SAVE VARIABLES * * */
+      int timeout_counter = 2000; // milliseconds
      /* ==========================================================*/
+
+    // ENABLE servos
+    go_enable_servos();
+
+    
+    if( activ == UNSECURE )
+    {
+        // procedure unlock  
+        servos[0].write(5);         // + LOAD FORCE ASSISTANT
+        servos[1].write(180);       // 90 -> 180 ; unlock 
+        servos[2].write(0);         // 90 -> 0   
+
+        while( map(analogRead(FB_L), 57, 590, 0, 180) > 175 ){ // servos[1] feedback read
+          if( timeout_counter-- < 0 ){
+            // error beep ...
+            go_disable_servos();
+            return; // exit from function
+          }
+          delay(1);
+        }
+
+        // change status 
+        EN_SECURITY = false;
+
+        // procedure open 
+        go_exp_motion_servo( 1 );
+    }
+    
+    else
+    {
+      // procedure close 
+      go_exp_motion_servo( 0 );
+
+      while( map(analogRead(FB_D), 57, 590, 0, 180) > 10 ) ){
+        if( timeout_counter-- < 0 ){
+            // error beep ...
+            go_disable_servos();
+            return; // exit from function
+        }
+        delay(1);
+      }
+
+      //procedure lock 
+      servos[1].write(90);         // 180 -> 90 ; lock 
+      servos[2].write(90);         // 0   -> 90 
+      int _timeout_counter = 2000;
+      while( map(analogRead(FB_L), 57, 590, 0, 180) < 98 ){
+        if( _timeout_counter-- < 0 ){
+            // error beep ...
+            go_disable_servos();
+            return; // exit from function
+        }
+      }
+
+      // change status 
+      EN_SECURITY = true;
+      
   
-  // ENABLE servo's
+    }
+
+    go_disable_servos();
+    delay(100);
+}
+
+
+
+
+void go_exp_motion_servo( int _direction ){ // 1 - open, 0 - close
+  /*
+     * REGULATOR VAR's
+     * coefficient's( a1, a2, c1, c2 ) regulate curve 
+     * ========================================================== */
+      double delta_t = 10;  /* Δtime */
+      int    scale_up_factor = 130;
+      
+      double a = 2,      /* accel open slope */     
+             c = 8.2  ;  /* half point of slope   */
+      double y1, y2, y ;   /* var for function result  */
+      int n = 1000;        /* assign No. of point plot */  
+     /* ==========================================================*/
+
+    // change direction 
+    if( _direction == 1 ){
+      a *= -1;
+      scale_up_factor = 90; // тук е за доизмисляне от къде да тръгва като кривата пак почва от нула
+    }
+    
+    // procedure motion
+    for( int i = 0; i < n ; i++ )
+    {
+      double f = ( delta_t / n ) * i;
+      {
+        y = 1/(1 + exp( a*(f-c) )); // calc curve motion
+        y *= scale_up_factor;       // scale up factor *130 
+        
+        // DEBUG: Serial.println(y);
+        servos[0].write( y );
+        delay(delta_t);
+      }
+    }         
+}
+
+
+// ENABLE servo's
+void go_enable_servos(){
+  // set pin attach 
   servos[0].attach(3);
   servos[1].attach(4);
   servos[2].attach(5);
+}
 
-  
-  if( activ == OPEN )
-  {
-    // procedure unlock  
-    servos[1].write(180);
-    servos[2].write(0);
-    delay(200);
-    EN_SECURITY = false;
-
-    // procedure open
-    for( int i = 0; i < n ; i++ ){
-      double f = delta_t + ( delta_t / n ) * i;
-      {
-        y1 = 1/(1 + exp( -a1*(f-c1) ));
-        //y2 = 1/(1 + exp( -a2*(f-c2) ));
-        y = y1 * DOOR_LEVEL_OPEN; /* scale up factor *130 */
-        Serial.println(y);
-        servos[0].write( y );
-        delay(10);
-      }
-    }
-  }
-  else
-  {
-    // procedure close 
-    
-    // procedure lock
-    servos[1].write(90);
-    servos[2].write(90);
-    delay(200);
-  }
-
-  // DISABLE servo's
+// DISABLE servo's
+void go_disable_servos(){
   for( int i = 0; i < sizeof(servos); i++ ){
-    servos[i].detach();
-  }
-  
+        servos[i].detach();
+    }
 }
 
 
