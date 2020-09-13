@@ -2,20 +2,17 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <QueueArray.h>
 #include<Servo.h>
 
-// FIFO for calculation delta in measurement
-QueueArray<float> queue_lastAngles;
-QueueArray<long>  queue_lastTimes;
-#define QUEUE_OPERATION_SIZE      10
-
 Servo servos[3];
-#define FB_D   A0 // feedback door 
-#define FB_L   A1 // feedback lock
-#define DOOR_LEVEL_CLOSED 5
-#define DOOR_LEVEL_OPEN   146
-#define buzzer 13
+#define FB_D   A0            // pin feedback door - A0
+#define FB_L   A1            // pin feedback lock - A1
+#define buzzer 7             // pin buzzer 
+#define SERVO_PWR_ENABLE A3  // pin MOSFET enable power servo 
+#define TILT_AMPULA      6   // pin tilt ampula input
+
+#define DOOR_LEVEL_CLOSED 5     // min position servo door closed
+#define DOOR_LEVEL_OPEN   146   // max 
 #define UNSECURE  1
 #define SECURE    0
 
@@ -34,7 +31,7 @@ Servo servos[3];
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 bool SCREEN_ALLOCATION = false;
 
-bool EN_SECURITY = false; // enabled security , status
+bool EN_SECURITY = true; // enabled security , status
 byte code[7] = {1, 0, 1, 0, 0, 1, 1 }; // unclock code
 
 // Variables for setting the time / agusment delta = set - show_now
@@ -44,8 +41,9 @@ void setup() {
   pinMode( FB_D,    INPUT );
   pinMode( FB_L,    INPUT );
   pinMode( buzzer, OUTPUT );
-  pinMode( 12,     OUTPUT ); // connect internal mos to GND when is logic 0 ( not open colector )!
-  digitalWrite( 12, 1 );     // enable mosfet servo power
+  pinMode( TILT_AMPULA, INPUT_PULLUP );
+  pinMode( SERVO_PWR_ENABLE, OUTPUT ); // connect internal mos to GND when is logic 0 ( not open colector )!
+  digitalWrite( SERVO_PWR_ENABLE, 1 );     // enable mosfet servo power
   go_disable_servos();
 
   Serial.begin(9600);
@@ -98,6 +96,7 @@ void intrpt_delay( int _milliseconds ) {
 }
 
 void check_RF() {
+
   /* listening for RF unlock signal
      unlock, validate unlock and open */
   if ( Serial.available() > 0 ) {
@@ -109,10 +108,17 @@ void check_RF() {
     // read data from RF module
     String code = Serial.readString();
     if ( code == "a" ) { // if valid code
+      
+      if( digitalRead( TILT_AMPULA ) == 1 ){ // not leveled
+        error_message( F("Hold at the correct level!") );
+        return;
+      }
+      
       tone( buzzer, 1047 /* C6 */ , 100);
+      
       if ( SCREEN_ALLOCATION ) disp_RFvalid();
-      // GO SERVO UNLOCK AND OPEN
-      go_servo(UNSECURE, 0);
+      
+      go_servo(UNSECURE, 0); // GO SERVO UNLOCK AND OPEN
     }
   }
 }
@@ -136,10 +142,10 @@ void check_serial_comport_pc() {
       + call go_servo( CLOSE, v0 );
 */
 void check_motion() {
-  digitalWrite( 12, 1 ); // enable power to servo for measuring pullup
+  digitalWrite( SERVO_PWR_ENABLE, 1 ); // enable power to servo for measuring pullup
   delay(1); // await register shift and read from ADC
   int angle_now = map( analogRead(FB_D), 152, 336, 0, 180 );
-  digitalWrite( 12, 0 );
+  digitalWrite( SERVO_PWR_ENABLE, 0 );
 
 #ifdef DEBUG_MOTION
   Serial.print("a[");
@@ -301,7 +307,7 @@ void go_enable_servos() {
   servos[0].attach(3);
   servos[1].attach(4);
   servos[2].attach(5);
-  digitalWrite( 12, 1);
+  digitalWrite( SERVO_PWR_ENABLE, 1);
 
 #ifdef DEBUG_SERVOS_P
   Serial.println("ENABLED SERVOS");
@@ -310,7 +316,7 @@ void go_enable_servos() {
 
 // DISABLE servo's
 void go_disable_servos() {
-  digitalWrite( 12, 0 ); // interupt servo power- reset automaticly position hold
+  digitalWrite( SERVO_PWR_ENABLE, 0 ); // interupt servo power- reset automaticly position hold
 
   for ( int i = 0; i < sizeof(servos); i++ ) {
     servos[i].detach();
