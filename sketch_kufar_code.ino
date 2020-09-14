@@ -1,17 +1,21 @@
 #include <SPI.h>
 #include <Wire.h>
+#include <nRF24L01.h>
+#include <RF24.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include<Servo.h>
 
 Servo servos[3];
+RF24 radio(9, 10);
+
 #define FB_D   A0            // pin feedback door - A0
 #define FB_L   A1            // pin feedback lock - A1
 #define buzzer 7             // pin buzzer 
 #define SERVO_PWR_ENABLE A3  // pin MOSFET enable power servo 
 #define TILT_AMPULA      6   // pin tilt ampula input
 
-#define DOOR_LEVEL_CLOSED 5     // min position servo door closed
+#define DOOR_LEVEL_CLOSED 7     // min position servo door closed
 #define DOOR_LEVEL_OPEN   146   // max 
 #define UNSECURE  1
 #define SECURE    0
@@ -31,7 +35,7 @@ Servo servos[3];
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 bool SCREEN_ALLOCATION = false;
 
-bool EN_SECURITY = true; // enabled security , status
+bool EN_SECURITY = false; // enabled security , status
 byte code[7] = {1, 0, 1, 0, 0, 1, 1 }; // unclock code
 
 // Variables for setting the time / agusment delta = set - show_now
@@ -43,9 +47,7 @@ void setup() {
   pinMode( buzzer, OUTPUT );
   pinMode( TILT_AMPULA, INPUT_PULLUP );
   pinMode( SERVO_PWR_ENABLE, OUTPUT ); // connect internal mos to GND when is logic 0 ( not open colector )!
-  digitalWrite( SERVO_PWR_ENABLE, 1 );     // enable mosfet servo power
-  go_disable_servos();
-
+  digitalWrite( SERVO_PWR_ENABLE, 0 );
   Serial.begin(9600);
 
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
@@ -54,7 +56,11 @@ void setup() {
     Serial.println(F("SSD1306 oled display allocation failed"));
   }
 
-  tone( buzzer, ((SCREEN_ALLOCATION) ? 1320 : 740), 50);
+  servos[1].write(180);     
+  servos[2].write(0);         
+  go_servo( SECURE ); // go close and lock
+  
+  tone( buzzer, ((SCREEN_ALLOCATION) ? 1320 : 740), 50); // signal for start loop
   delay(100);
 }
 
@@ -118,7 +124,7 @@ void check_RF() {
       
       if ( SCREEN_ALLOCATION ) disp_RFvalid();
       
-      go_servo(UNSECURE, 0); // GO SERVO UNLOCK AND OPEN
+      go_servo( UNSECURE ); // GO SERVO UNLOCK AND OPEN
     }
   }
 }
@@ -155,7 +161,7 @@ void check_motion() {
 #endif
 
   if ( angle_now < AC_ANGLE ) {
-    go_servo( SECURE, 0 );
+    go_servo( SECURE );
     delay(2000);
   }
 
@@ -173,11 +179,12 @@ void check_motion() {
      unlock  s[1] - 180; s[2] - 0;
      lock    s[1] - 90;  s[2] - 90;
 */
-void go_servo( byte activ, double v0 ) {
+void go_servo( byte activ  ) {
 
   int timeout_counter = 2000;
   // ENABLE servos
   go_enable_servos();
+  delay(1);
 
 
   if ( activ == UNSECURE )
@@ -208,8 +215,9 @@ void go_servo( byte activ, double v0 ) {
     // procedure close
     go_exp_motion_servo( 0 );
 
-    while ( map( analogRead(FB_D), 152, 336, 0, 180 ) > 10 ) {
-      if ( timeout_counter-- < 0 ) {
+    int _timeout_counter = 1000;
+    while ( map( analogRead(FB_D), 152, 336, 0, 180 ) > DOOR_LEVEL_CLOSED ) {
+      if ( _timeout_counter-- < 0 ) {
         go_disable_servos();
         error_message(F("timeout close"));
         return; // exit from function
@@ -220,9 +228,9 @@ void go_servo( byte activ, double v0 ) {
     //procedure lock
     servos[1].write(90);         // 180 -> 90 ; lock
     servos[2].write(90);         // 0   -> 90
-    int _timeout_counter = 2000;
+    
     while (  map( analogRead(FB_L), 57,  590, 0, 180 ) > 94 ) {
-      if ( _timeout_counter-- < 0 ) {
+      if ( timeout_counter-- < 0 ) {
         go_disable_servos();
         error_message(F("timeout lock"));
         return; // exit from function
@@ -249,38 +257,30 @@ void go_exp_motion_servo( int _direction ) { // 1 - open, 0 - close
        coefficient's( a1, a2, c1, c2 ) regulate curve
        ========================================================== */
   double delta_t = 10;  /* Δtime */
-  int    scale_up_factor = ( AC_ANGLE - 20 ) - DOOR_LEVEL_CLOSED ;
+  int    scale_up_factor = DOOR_LEVEL_OPEN ;
 
-  double a = 7,        /* accel open slope */
-         c = 9  ;    /* half point of slope   */
+  double a = -2,        /* accel open slope */
+         c = 8.2  ;    /* half point of slope   */
   double y ;         /* var for function result  */
   int n = 1000;      /* assign No. of point plot */
 
   // points(i) in interval [ n_0 - n_x1000 ]
-  int n_0 = 859;
+  int n_0 = 763;
   int n_x = 1000;
   /* ==========================================================*/
 
-  // change direction
-  if ( _direction == 1 ) { // if open
-    a = -2;
-    scale_up_factor = DOOR_LEVEL_OPEN ; // тук е за доизмисляне от къде да тръгва като кривата пак почва от нула
-    n_0 = 763;
-    c = 8.2;
-
-
-    // procedure motion
+  // if DIR OPEN 
+  if ( _direction == 1 ) 
+  { 
+    // procedure motion open to limit exponencial
     for ( int i = n_0; i < n_x ; i++ ) // foreach points(i) in interval [ 0 - 1000 ]
     {
-
-      double f = ( delta_t / n ) * i;
-      {
+        double f = ( delta_t / n ) * i;
         y = 1 / (1 + exp( a * (f - c) )); // calc curve motion
         y *= scale_up_factor;       // scale up factor *130
         y += DOOR_LEVEL_CLOSED;
         servos[0].write( y );
         delay(delta_t);
-      }
 
         #ifdef DEBUG_EXP
               Serial.print("i[");
@@ -291,9 +291,10 @@ void go_exp_motion_servo( int _direction ) { // 1 - open, 0 - close
         #endif
     }
   }
-  else {
-
-    for ( int i = AC_ANGLE - 10; i > 7; i-- ) {
+  else  // if DIR CLOSE 
+  { 
+    // procedure close from level linear
+    for ( int i = map( analogRead(FB_D), 152, 336, 0, 180 ); i > DOOR_LEVEL_CLOSED; i-- ) {
       servos[0].write( i );
       delay(47);
     }
