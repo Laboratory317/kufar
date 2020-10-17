@@ -8,13 +8,14 @@
 #include<Servo.h>
 Servo servos[3];
 
-#define FB_D             A0  // pin feedback door - A0
-#define FB_L             A1  // pin feedback lock - A1
-#define BATTERY_ADC      A2  // pin voltage battery read - A2 delitel 
-#define buzzer           7   // pin buzzer 
-#define SERVO_PWR_ENABLE A3  // pin MOSFET enable power servo - A3, resistor GND
-#define TILT_AMPULA      6   // pin tilt ampula input , GND -> 7 pin
-#define RF_signal        2   // pin from RF receiver / 1 for available 
+#define FB_D             	 A0  // pin feedback door - A0
+#define FB_L             	 A1  // pin feedback lock - A1
+#define BATTERY_ADC          A2  // pin voltage battery read - A2 delitel 
+#define buzzer               7   // pin buzzer 
+#define SERVO_DOOR_ENABLE    A3  // pin MOSFET enable power servo - A3, resistor GND
+#define SERVO_LOCK_ENABLE    A4  // pin MOSFET enable power servos - A4 
+#define TILT_AMPULA      	 6   // pin tilt ampula input , GND -> 7 pin
+#define RF_signal        	 2   // pin from RF receiver / 1 for available 
 
 #define DOOR_LEVEL_CLOSED 10     // min position servo door closed
 #define DOOR_LEVEL_OPEN   146   // max 
@@ -24,10 +25,10 @@ Servo servos[3];
 
 
 // DEBUG DEFINES
-//#define DEBUG_SERVOS_P
+#define DEBUG_SERVOS_P
 //#define DEBUG_EXP
 //#define DEBUG_MOTION
-#define DISABLE_LOCK 
+#define DISABLE_LOCK
 
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
@@ -309,7 +310,7 @@ const unsigned char gears_array[14][120] PROGMEM = {
     0x2f, 0xff, 0x00, 0x00, 0x07, 0xff, 0x80, 0x00, 0x03, 0xff, 0x00, 0x00, 0x07, 0xc6, 0x00, 0x00,
     0x03, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
   }, */
-  { 
+  {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00, 0x78, 0x00, 0x00, 0x00, 0x3d, 0xc0,
     0x00, 0x00, 0x7f, 0xe0, 0x00, 0x03, 0xf7, 0xe0, 0x00, 0x03, 0xc1, 0xc0, 0x00, 0x07, 0xc0, 0xc0,
     0x00, 0x03, 0x80, 0xe0, 0x00, 0x01, 0xc0, 0xf0, 0x00, 0x00, 0xc1, 0xf0, 0x00, 0x01, 0xe3, 0xf0,
@@ -336,7 +337,7 @@ const byte addresses[][6]  = {{'R', 'x', 'G', 'Y', 'A'},  {'T', 'x', 'G', 'E', '
 const int  channel    = 100;     // set channel 2.400GHz ( b0 ) - 2.524GHz ( b124 );
 const char ping[]   = "b06a5f1ab41c7bd0705b0b85843a";   // ping code (public key randum)
 const char code_s[] = "b067becac7f8a1059356ccbf278e";   // max size 32bytes
-const char code_r[] = "0ceab8e71268fe7d44f36cc93d10";  
+const char code_r[] = "0ceab8e71268fe7d44f36cc93d10";
 char receive_buf[32] = "";
 
 int n = sizeof (gears_array) / sizeof (gears_array[0]);
@@ -350,14 +351,18 @@ float battery_voltage;
 QueueArray<float> battery_measurements;
 
 void setup() {
-  pinMode( FB_D,        INPUT );
-  pinMode( FB_L,        INPUT );
-  pinMode( BATTERY_ADC, INPUT );
-  pinMode( RF_signal   ,INPUT );
-  pinMode( buzzer,      OUTPUT );
-  pinMode( TILT_AMPULA, INPUT_PULLUP );
-  pinMode( SERVO_PWR_ENABLE,  OUTPUT ); // connect internal mos to GND when is logic 0 ( not open colector )!
-  digitalWrite( SERVO_PWR_ENABLE,  0 );
+  pinMode( FB_D        , INPUT );
+  pinMode( FB_L        , INPUT );
+  pinMode( BATTERY_ADC , INPUT );
+  pinMode( RF_signal   , INPUT );
+  pinMode( buzzer      , OUTPUT );
+  pinMode( TILT_AMPULA , INPUT_PULLUP );
+  // ENABLE SHTIFTS
+  pinMode( SERVO_DOOR_ENABLE      , OUTPUT ); // connect internal mos to GND when is logic 0 ( not open colector )!
+  pinMode( SERVO_LOCK_ENABLE     , OUTPUT );
+  digitalWrite( SERVO_LOCK_ENABLE,  0 ); // disable shtifts
+  digitalWrite( SERVO_DOOR_ENABLE,  0 );
+
   Serial.begin(9600);
 
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
@@ -367,7 +372,7 @@ void setup() {
   }
   display.clearDisplay();
 
-  // NRF24L01 begin settup 
+  // NRF24L01 begin setup
   radio.begin();
   radio.openWritingPipe(addresses[0]); // 00001
   radio.openReadingPipe(1, addresses[1]); // 00002
@@ -378,14 +383,17 @@ void setup() {
 
   radio.disableDynamicPayloads();
   radio.setAutoAck(false);
-  
-  
-  // go servo to unlock position
-  servos[1].write(180);
-  servos[2].write(0);
-  go_servo( SECURE ); // go close and lock
 
   tone( buzzer, ((SCREEN_ALLOCATION) ? 1320 : 740), 50); // signal for start loop
+
+  Serial.println("START");
+  // wait 6s
+  delay(6000);
+  Serial.println("6s.");
+
+  // go servo to unlock position
+  go_servo( SECURE ); // go close and lock
+
   delay(100);
 }
 
@@ -397,11 +405,11 @@ void setup() {
 */
 void loop() {
 
-  if ( SCREEN_ALLOCATION ) 
+  if ( SCREEN_ALLOCATION )
   {
-	  disp_ownerInfo();
+    disp_ownerInfo();
     intrpt_delay(3500);
-        
+
     for ( int i = 0; i < 3 ; i++ ) {
       disp_securityStatus();
       intrpt_delay((EN_SECURITY) ? 400 : 750);
@@ -413,22 +421,22 @@ void loop() {
     //disp_battery_status();
     //intrpt_delay(1000);
   }
-  else /* only check */ 
-	intrpt_delay(10);
+  else /* only check */
+    intrpt_delay(10);
 }
 
 void intrpt_delay( int _milliseconds ) {
   long feature_time =  millis() + _milliseconds;
   while ( millis() < feature_time ) {
-    ( EN_SECURITY ) ? check_RF() : check_motion();
-     check_serial_comport_pc();
+    check_RF() ;
+    // check_serial_comport_pc();
     // check_battery_level();
   }
 }
 
 
 /**
- * INTERUPTI :
+   INTERUPTI :
 */
 void check_battery_level() {
   // read ADC value bites * ADC referent voltage(AREF) / resolution ADC
@@ -454,7 +462,7 @@ void check_serial_comport_pc() {
     Serial.println(F("MENU >_"));
     String _read = Serial.readString();
     _read.toUpperCase();
-	
+
     if ( _read.indexOf( "TIME" ) >= 0  ) {
       Serial.println(F("TIME > Insert seconds to set >_"));
       while (1) {
@@ -465,19 +473,19 @@ void check_serial_comport_pc() {
         }
       }
     }
-	else if ( _read.indexOf( "UNLOCK" ) >= 0  ) {
-		if ( SCREEN_ALLOCATION ) disp_RFinit();
-		delay(100);
-		
-		if ( digitalRead( TILT_AMPULA ) == 1 ) { // not leveled
-			error_message( F("Hold at incorrect level!") );
-			return;
-		}
-		
-		tone( buzzer, 1047 , 100);
-		if ( SCREEN_ALLOCATION ) disp_RFvalid();
-		go_servo( UNSECURE ); // GO SERVO UNLOCK AND OPEN
-	}	
+    else if ( _read.indexOf( "UNLOCK" ) >= 0  ) {
+      if ( SCREEN_ALLOCATION ) disp_RFinit();
+      delay(100);
+
+      if ( digitalRead( TILT_AMPULA ) == 1 ) { // not leveled
+        error_message( F("Hold at incorrect level!") );
+        return;
+      }
+
+      tone( buzzer, 1047 , 100);
+      if ( SCREEN_ALLOCATION ) disp_RFvalid();
+      go_servo( UNSECURE ); // GO SERVO UNLOCK AND OPEN
+    }
   }
 }
 
@@ -489,30 +497,30 @@ void check_RF() {
   if ( radio.available() ) {
     radio.stopListening();
 
-    // READ [ping] 
+    // READ [ping]
     clear_receivebuf();
     radio.read(&receive_buf, sizeof(receive_buf));
-	
-	Serial.print(F("receive ping: "));
+
+    Serial.print(F("receive ping: "));
     Serial.println(receive_buf);
 
-    // IF is ping 
+    // IF is ping
     if ( strcmp(receive_buf, ping) == 0) {
-		
+
       Serial.println(F("ping ok."));
 
       // WRITE [code_s]
       int stat = radio.write(&code_s, sizeof(code_s));
       Serial.print(F("response [code_s] = "));
       Serial.println(stat);
-	  delay(1);
-	
-      // LISTENING 
+      delay(1);
+
+      // LISTENING
       radio.startListening();
       int timeout = 200; // 200ms.
-	  disp_RFinit();
-	  delay(100);
-	  Serial.println(F("LISTENING code_r... "));
+      disp_RFinit();
+      delay(100);
+      Serial.println(F("LISTENING code_r... "));
       while ( timeout > 0 ) {
         timeout--;
         if ( radio.available() ) {
@@ -522,59 +530,63 @@ void check_RF() {
           clear_receivebuf();
           radio.read(&receive_buf, sizeof(receive_buf));
           Serial.println( receive_buf );
-          
-          // Check code_r is valid 
+
+          // Check code_r is valid
           if ( strcmp(receive_buf, code_r) == 0) {
-			disp_RFvalid();
-			goto VALID_TODO;
+            disp_RFvalid();
+            goto VALID_TODO;
           }
-          
+
           clear_availableFIFO();
           return;
         }
         delay(1);
       }
-      Serial.println("timeout request [code_r]"); 
-	  goto VALID_TODO;
-	  clear_availableFIFO();
+      Serial.println("timeout request [code_r]");
+      goto VALID_TODO;
+      clear_availableFIFO();
     }
   }
   return;
-  
+
 VALID_TODO:
-  if ( digitalRead( TILT_AMPULA ) == 1 ) { // not leveled
-	error_message( F("Hold at incorrect level!") );
-    return;
+  if (  EN_SECURITY == true ) {
+    if ( digitalRead( TILT_AMPULA ) == 1 ) { // not leveled
+      error_message( F("Hold at incorrect level!") );
+      return;
+    }
   }
   tone( buzzer, 1047 /* C6 */ , 100);
-		
-  go_servo( UNSECURE ); // GO SERVO UNLOCK AND OPEN
+
+  go_servo( (EN_SECURITY) ? UNSECURE : SECURE ); // GO SERVO UNLOCK AND OPEN
   delay(1000);
 }
 
-void check_motion() {
-  digitalWrite( SERVO_PWR_ENABLE, 1 ); // enable power to servo for measuring pullup
+/*
+  void check_motion() {
+  digitalWrite( SERVO_DOOR_ENABLE, 1 ); // enable power to servo for measuring pullup
   delay(1); // await register shift and read from ADC
   int angle_now = map( analogRead(FB_D), 152, 336, 0, 180 );
-  digitalWrite( SERVO_PWR_ENABLE, 0 ); 
+  digitalWrite( SERVO_DOOR_ENABLE, 0 );
 
-#ifdef DEBUG_MOTION
+  #ifdef DEBUG_MOTION
   Serial.print("a[");
   Serial.print( angle_now);
   Serial.print("];");
   Serial.println();
-#endif
+  #endif
 
   if ( angle_now < AC_ANGLE ) {
     go_servo( SECURE );
     delay(10);
   }
-}
+  }
+*/
 
 
 
 
-/** 
+/**
    ===============================================================
   * * * Servo controller * * *
    ===============================================================
@@ -583,122 +595,81 @@ void check_motion() {
      + map( analogRead(A1), 57,  590, 0, 180 )
      + map( analogRead(A0), 152, 336, 0, 180 )
    position lock mechanisum:
-     unlock  s[1] - 160; s[2] - 0;
-     lock    s[1] - 90;  s[2] - 90;
+*/ int   /*unlock  s[1]*/  S1U  = 100, /* s[2] */ S2U = 0,  /*
+           lock    s[1]*/  S1L  = 30,  /* s[2] */ S2L = 90; /*
 */
 void go_servo( byte activ ) {
+  // DEBUG
+  Serial.print("go_servo(");
+  Serial.print( (activ == UNSECURE) ? "unsecure" : "secure");
+  Serial.print(")");
+  Serial.println("");
 
-  int timeout_counter_lock  = 2000;  // after loop unlock/lock - timeout 2s.
-  int timeout_counter_close = 1000;  // after loop close       - timeout 1s.
-  
- 
-  if ( activ == UNSECURE )
-  {
-	// ENABLE all servos
-    go_enable_servos(); 
-	
-	#ifndef DISABLE_LOCK 
-    // Procedure UNLOCK
-    servos[0].write(DOOR_LEVEL_CLOSED);  // + LOAD FORCE ASSISTANT
-    servos[1].write(160);       // 90 -> 160 ; unlock
-    servos[2].write(0);         // 90 -> 0
+  if ( activ == SECURE ) { // LOCK PROCEDURE
+    go_enable_servos();
 
-	// if servo[1] feedback not unlocked status -> wait timeout seconds
-    while ( map( analogRead(FB_L), 57,  590, 0, 180 ) < 150 ) { 
-      if ( timeout_counter_lock-- < 0 ) { 
-        go_disable_servos();
-        error_message(F("timeout unlock"));
-        return; // exit from function
-      }
-      delay(1);
-    }
-	
-    // Change status
-    EN_SECURITY = false;
-	
-	// Disable lock servos
-	servos[1].detach();
-	servos[2].detach();
-	
-	#endif
-	
-    // Procedure OPEN
-    go_exp_motion_servo( 1 );
-	
-	// without check - feedback is real open.
-  }
+    // unlock mechanisum + set position start pwm;
+    servos[0].write(90);
+    servos[1].write(S1U);
+    servos[2].write(S2U);
 
+    go_exp_motion_servo( 0 ); // close
 
-  else
-  {
-	// Enable door servo + enable power pin
-	servos[0].attach(3);
-	digitalWrite( SERVO_PWR_ENABLE, 1);
-	
-    // Procedure CLOSE 
-    go_exp_motion_servo( 0 );
-    
-	// if servos[0] feedback is not closed -> wait timeout seconds 
-    while ( map( analogRead(FB_D), 152, 336, 0, 180 ) > DOOR_LEVEL_CLOSED ) {
-      if ( timeout_counter_close-- < 0 ) {
-        go_disable_servos();
-        error_message(F("timeout close"));
-        return; // exit from function
-      }
-      delay(1);
-    }
-	
-	#ifndef DISABLE_LOCK
-	
-    // Enable lock servos
-	servos[1].attach(4);
-	servos[2].attach(5);
-	
-	// Procedure LOCK
-    servos[1].write(90);         // 180 -> 90 ; lock
-    servos[2].write(90);         // 0   -> 90
+    // lock
+    servos[1].write(S1L);
+    servos[2].write(S2L);
+    delay(900);
 
-	// if servo[1] feedback not locked status -> wait timeout seconds
-    while (  map( analogRead(FB_L), 57,  590, 0, 180 ) > 95 ) {
-      if ( timeout_counter_lock-- < 0 ) {
-        go_disable_servos();
-        error_message(F("timeout lock"));
-        return; // exit from function
-      }
-      delay(1);
-    }
-	#endif
-	
-    // Change status
+    go_disable_servos();
     EN_SECURITY = true;
+
   }
 
-  // DISABLE all servos
-  go_disable_servos();
+  if ( activ == UNSECURE ) { // UNLOCK PROCEDURE
+    go_enable_servos();
+
+    // unlock mechanisum + set posirion start pwm;
+    servos[0].write(DOOR_LEVEL_CLOSED);
+    servos[1].write(S1U);
+    servos[2].write(S2U);
+
+    delay(900);
+    // disable lock mechanisum
+    servos[1].detach();
+    servos[2].detach();
+
+    go_exp_motion_servo( 1 ); // open
+
+    go_disable_servos();
+    EN_SECURITY = false;
+  }
 
 }
 
 
 void go_exp_motion_servo( int _direction ) { // 1 - open, 0 - close
-	/* ==========================================================			
-	 *   REGULATOR VAR's
-	 *   coefficient's( a1, a2, c1, c2 ) regulate curve
-	 */
-	  double delta_t = 10;  /* Δtime 10ms */
-	  int    scale_up_factor = DOOR_LEVEL_OPEN ;
 
-	  double a = -3,     /* accel open slope */
-			 c = 7.2  ;  /* half point of slope   */
-	  double y ;         /* var for function result  */
-	  int n = 1000;      /* assign No. of point plot */
+  /* ==========================================================
+       REGULATOR VAR's
+       coefficient's( a1, a2, c1, c2 ) regulate curve
+  */
+  double delta_t = 10;  /* Δtime 10ms */
+  int    scale_up_factor = DOOR_LEVEL_OPEN ;
 
-	  // points(i) in interval [ n_0 - n_x1000 ]
-	  int n_0 = 680; // 763
-	  int n_x = 850;
+  double a = -3,     /* accel open slope */
+         c = 7.2  ;  /* half point of slope   */
+  double y ;         /* var for function result  */
+  int n = 1000;      /* assign No. of point plot */
+
+  // points(i) in interval [ n_0 - n_x1000 ]
+  int n_0 = 680; // 763
+  int n_x = 850;
 
   /* ============= DIRECTION CHECK ============================*/
-  if ( _direction == 1 ) // IF DIR OPEN 
+  if ( _direction == 1 ) // IF DIR OPEN
   {
+    Serial.println( "go_exp_motion_servo(open)" );
+
     // procedure motion open to limit exponencial
     for ( int i = n_0; i < n_x ; i++ ) // foreach points(i) in interval [ 0 - 1000 ]
     {
@@ -711,25 +682,25 @@ void go_exp_motion_servo( int _direction ) { // 1 - open, 0 - close
 
 
       servos[0].write( y );
-      
-      #ifdef DEBUG_EXP
-            Serial.print("i[");
-            Serial.print(i);
-            Serial.print("]  y[");
-            Serial.print(y);
-            Serial.println();
-      #endif
-      
+
+#ifdef DEBUG_EXP
+      Serial.print("i[");
+      Serial.print(i);
+      Serial.print("]  y[");
+      Serial.print(y);
+      Serial.println();
+#endif
+
     }
   }
   else  // IF DIR CLOSE
   {
-	delay(1);
-    // procedure close from level linear
-    for ( int i = map( analogRead(FB_D), 152, 336, 0, 180 ); i > DOOR_LEVEL_CLOSED; i-- ) {
+    Serial.println( "go_exp_motion_servo(close)" );
+    int i = DOOR_LEVEL_OPEN;
+    for ( ; i > DOOR_LEVEL_CLOSED; i-- ) {
       disp_animationProcess(); // interrupt to show next frame
       servos[0].write( i );
-	  delay(20);
+      delay(20);
     }
   }
 }
@@ -741,7 +712,8 @@ void go_enable_servos() {
   servos[0].attach(3);
   servos[1].attach(4);
   servos[2].attach(5);
-  digitalWrite( SERVO_PWR_ENABLE, 1);
+  digitalWrite( SERVO_DOOR_ENABLE, 1);
+  digitalWrite( SERVO_LOCK_ENABLE, 1);
   delay(10);
 
 #ifdef DEBUG_SERVOS_P
@@ -751,8 +723,8 @@ void go_enable_servos() {
 
 // DISABLE servo's
 void go_disable_servos() {
-  digitalWrite( SERVO_PWR_ENABLE, 0 ); // interupt servo power- reset automaticly position hold
-
+  digitalWrite( SERVO_DOOR_ENABLE, 0 ); // interupt servo power- reset automaticly position hold
+  digitalWrite( SERVO_LOCK_ENABLE, 0 );
   for ( int i = 0; i < sizeof(servos); i++ ) {
     servos[i].detach();
   }
@@ -772,7 +744,7 @@ void go_disable_servos() {
 
 
 
-/** 
+/**
    ================================================================
   * * * DISPLAY FRAME's * *
    create function disp_< frame_name > for anyone frame
@@ -852,7 +824,7 @@ void disp_animationProcess() {
   if ( (_frame + 1) <= n ) {
     display.clearDisplay();
     display.drawBitmap(0, 0, gears_array[_frame], 30, 30, 1);
-	//delay(8);
+    //delay(8);
 
     display.setTextSize(2);
     display.setTextColor(SSD1306_WHITE);
@@ -928,6 +900,8 @@ void disp_battery_status() {
    =================================================================
 */
 void error_message( String _exeption ) {
+  go_disable_servos();
+
   display.clearDisplay();
   display.setTextSize(2);
   display.setCursor(0, 0);
@@ -949,20 +923,25 @@ void print_dec_clock(int n) {
   display.print(n);
 }
 
-void clear_availableFIFO(){
+void clear_availableFIFO() {
   radio.stopListening();
   char receive_buf[32] = "";
   int stack_n = 0;
+  int timeout = 3000;
   while (radio.available()) {
-      radio.read(&receive_buf, sizeof(receive_buf));// read and clear
-      Serial.print("clear buf/");
-      Serial.print(stack_n);
-      Serial.print("/");
-      Serial.println(receive_buf);
-      stack_n++;
+    radio.read(&receive_buf, sizeof(receive_buf));// read and clear
+    Serial.print("clear buf/");
+    Serial.print(stack_n);
+    Serial.print("/");
+    Serial.println(receive_buf);
+    stack_n++;
+    timeout--;
+    if ( timeout < 1 ) {
+      return;
+    }
   }
 }
 
-void clear_receivebuf(){
+void clear_receivebuf() {
   receive_buf[32] = "";
 }
